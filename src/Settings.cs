@@ -322,12 +322,13 @@ namespace VolumeKeeper
                 string typed = addBox.Text.Trim();
                 if (typed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) typed = typed.Substring(0, typed.Length - 4);
                 if (typed.Length == 0) return;
-                if (!Config.IsValidAppKey(typed))
-                {
-                    MessageBox.Show(this, "「" + typed + "」はアプリ名として登録できません。\n設定項目と同じ名前や、= # ; [ ] を含む名前は使えません。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
                 c = new Candidate { Key = typed, Title = typed };
+            }
+            // 候補から選んだ場合も、Theme.exe のように設定項目と同じ名前のプロセスは登録できない
+            if (!Config.IsValidAppKey(c.Key))
+            {
+                MessageBox.Show(this, "「" + c.Key + "」はアプリ名として登録できません。\n設定項目と同じ名前や、= # ; [ ] を含む名前は使えません。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
             }
             if (ConfiguredKeys().Contains(c.Key))
             {

@@ -159,20 +159,26 @@ namespace VolumeKeeper
     }
 
     // セッションが新しく現れたときだけ設定値の音量にする。
-    // 再起動やUSBオーディオ機器の再接続でWindowsが音量を100%に戻す対策で、ユーザーが途中で変えた音量はそのまま残す。
+    // 再起動やUSBオーディオ機器の再接続でWindowsが音量を100%に戻す対策で、ユーザーが途中で変えた音量はできるだけ残す。
     class Keeper
     {
+        // 音量の設定に失敗したときに、同じセッションへ試し直す上限（確認間隔ごとに1回）
+        const int MaxAttempts = 5;
+
         // 処理済みのセッション（インスタンスID → アプリのキー）
         Dictionary<string, string> known = new Dictionary<string, string>();
+        // 初回の設定に失敗した回数（インスタンスID → 回数）
+        Dictionary<string, int> failures = new Dictionary<string, int>();
 
         // 適用直後にWindowsが保存値で上書きすることがあるため、少し後にもう一度確認する
-        class Recheck { public DateTime Due; public float Before; }
+        class Recheck { public DateTime Due; public float Before; public int Attempts; }
         Dictionary<string, Recheck> recheck = new Dictionary<string, Recheck>();
 
         // 対象デバイスが変わったときに呼ぶ。今あるセッションすべてに設定値を適用し直す
         public void ResetAll()
         {
             known.Clear();
+            failures.Clear();
         }
 
         // 音量の設定値が変わった（または追加された）アプリだけ、今あるセッションにも適用し直す
@@ -182,39 +188,77 @@ namespace VolumeKeeper
                 if (keys.Contains(kv.Value)) known.Remove(kv.Key);
         }
 
+        // ミキサーでユーザーが音量やミュートを操作したセッションは、再確認で上書きしない
+        public void Protect(IEnumerable<string> instanceIds)
+        {
+            foreach (var id in instanceIds) recheck.Remove(id);
+        }
+
         public void Tick(Config config)
         {
             var current = new Dictionary<string, string>();
+            var seen = new HashSet<string>();
             foreach (var s in Audio.GetSessions(config.EndpointPattern))
             {
                 float level;
                 if (!config.Levels.TryGetValue(s.Key, out level)) continue;
-                current[s.InstanceId] = s.Key;
+                seen.Add(s.InstanceId);
                 string name = s.Key + " @ " + s.EndpointName;
                 Recheck pending;
                 if (!known.ContainsKey(s.InstanceId))
                 {
                     float before = s.Volume;
-                    if (s.SetVolume(level)) Log.Write(name + ": " + Log.Percent(before) + " -> " + Log.Percent(level));
-                    recheck[s.InstanceId] = new Recheck { Due = DateTime.Now.AddSeconds(6), Before = before };
-                }
-                else if (recheck.TryGetValue(s.InstanceId, out pending) && DateTime.Now >= pending.Due)
-                {
-                    recheck.Remove(s.InstanceId);
-                    // Windowsが元の値に戻した場合だけ設定し直す。ユーザーが別の値に変えた場合はそのまま残す
-                    if (Math.Abs(s.Volume - pending.Before) < 0.005f && Math.Abs(s.Volume - level) > 0.005f)
+                    if (s.SetVolume(level))
                     {
-                        s.SetVolume(level);
+                        Log.Write(name + ": " + Log.Percent(before) + " -> " + Log.Percent(level));
+                        failures.Remove(s.InstanceId);
+                        recheck[s.InstanceId] = new Recheck { Due = DateTime.Now.AddSeconds(6), Before = before };
+                        current[s.InstanceId] = s.Key;
+                    }
+                    else
+                    {
+                        // 失敗したら処理済みにせず、次の確認で試し直す。上限に達したらあきらめる
+                        int count;
+                        failures.TryGetValue(s.InstanceId, out count);
+                        failures[s.InstanceId] = ++count;
+                        if (count >= MaxAttempts)
+                        {
+                            Log.Write(name + ": 音量を設定できませんでした（" + count + "回失敗したため中止）");
+                            failures.Remove(s.InstanceId);
+                            current[s.InstanceId] = s.Key;
+                        }
+                        else Log.Write(name + ": 音量を設定できませんでした（" + count + "回目、次の確認で再試行）");
+                    }
+                    continue;
+                }
+                current[s.InstanceId] = s.Key;
+                if (recheck.TryGetValue(s.InstanceId, out pending) && DateTime.Now >= pending.Due)
+                {
+                    // Windowsが元の値に戻したとみられる場合だけ設定し直す。別の値に変わっていればユーザーの操作として残す
+                    if (Math.Abs(s.Volume - pending.Before) >= 0.005f || Math.Abs(s.Volume - level) <= 0.005f)
+                    {
+                        recheck.Remove(s.InstanceId);
+                    }
+                    else if (s.SetVolume(level))
+                    {
+                        recheck.Remove(s.InstanceId);
                         Log.Write(name + ": 再確認で " + Log.Percent(pending.Before) + " -> " + Log.Percent(level));
                     }
+                    else if (++pending.Attempts >= MaxAttempts)
+                    {
+                        recheck.Remove(s.InstanceId);
+                        Log.Write(name + ": 再確認で音量を設定できませんでした（" + pending.Attempts + "回失敗したため中止）");
+                    }
+                    else Log.Write(name + ": 再確認で音量を設定できませんでした（" + pending.Attempts + "回目、次の確認で再試行）");
                 }
             }
             known = current;
             foreach (var id in new List<string>(recheck.Keys))
-                if (!current.ContainsKey(id)) recheck.Remove(id);
+                if (!seen.Contains(id)) recheck.Remove(id);
+            foreach (var id in new List<string>(failures.Keys))
+                if (!seen.Contains(id)) failures.Remove(id);
         }
     }
-
     static class Program
     {
         [DllImport("user32.dll")]

@@ -202,6 +202,14 @@ namespace VolumeKeeper
 
         public string EndpointPattern;
 
+        // ユーザーがミキサーでアプリの音量やミュートを操作したとき（対象セッションのインスタンスID）
+        public event Action<IEnumerable<string>> SessionsAdjusted;
+
+        void RaiseAdjusted(VolumeRow row)
+        {
+            if (SessionsAdjusted != null) SessionsAdjusted(row.Sessions.Select(x => x.InstanceId).ToList());
+        }
+
         // 画面外クリックで閉じた直後のトレイクリックで、すぐ開き直さないための判定
         public bool JustHidden { get { return (DateTime.Now - hiddenAt).TotalMilliseconds < 300; } }
 
@@ -262,6 +270,8 @@ namespace VolumeKeeper
 
         public void ShowMixer()
         {
+            // 前回と別のモニター（作業領域の高さが違う）で開く場合もあるので、毎回組み立て直す
+            signature = null;
             RefreshRows();
             PlaceNearTray();
             Show();
@@ -406,8 +416,8 @@ namespace VolumeKeeper
                 {
                     var first = group.Value[0];
                     var row = AddRow(body, group.Key, AppInfo.TitleFor(first), AppInfo.IconFor(first), rowY, rowWidth);
-                    row.VolumeChanged += delegate { foreach (var x in row.Sessions) x.SetVolume(row.Volume); };
-                    row.MuteToggled += delegate { foreach (var x in row.Sessions) x.SetMute(row.Muted); };
+                    row.VolumeChanged += delegate { foreach (var x in row.Sessions) x.SetVolume(row.Volume); RaiseAdjusted(row); };
+                    row.MuteToggled += delegate { foreach (var x in row.Sessions) x.SetMute(row.Muted); RaiseAdjusted(row); };
                     rowY += row.Height;
                 }
                 Height = y + bodyHeight + (int)(8 * s);

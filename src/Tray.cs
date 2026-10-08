@@ -141,12 +141,9 @@ namespace VolumeKeeper
         {
             try
             {
+                // 読み込みに成功したときだけ時刻を記録し、失敗したら次の確認で読み直す
                 DateTime stamp = File.GetLastWriteTimeUtc(configPath);
-                if (stamp != configStamp)
-                {
-                    configStamp = stamp;
-                    ReloadConfig();
-                }
+                if (stamp != configStamp && ReloadConfig()) configStamp = stamp;
                 if (config != null) keeper.Tick(config);
             }
             catch (Exception ex)
@@ -155,21 +152,32 @@ namespace VolumeKeeper
             }
         }
 
-        // 設定ファイルを読み直す。読めない行は飛ばし、ファイル自体を読めなければ直前の設定を使い続ける
-        void ReloadConfig()
+        // 読み込みに失敗している間、ログと通知を繰り返さないための印
+        bool loadFailureReported;
+
+        // 設定ファイルを読み直す。読めない行は飛ばし、ファイル自体を読めなければ直前の設定（初回は既定値）を使い続けて false を返す
+        bool ReloadConfig()
         {
             var warnings = new List<string>();
             Config next;
+            bool loaded = true;
             try
             {
                 next = Config.Load(configPath, warnings);
+                if (loadFailureReported) Log.Write("設定ファイルを読み込めるようになりました");
+                loadFailureReported = false;
             }
             catch (Exception ex)
             {
-                Log.Write("設定ファイルを読み込めません（" + (config == null ? "既定値" : "直前の設定") + "で動作します）: " + ex.Message);
-                Notify("設定ファイルを読み込めませんでした。トレイメニューの「設定...」から設定し直せます。");
-                if (config != null) return;
+                if (!loadFailureReported)
+                {
+                    Log.Write("設定ファイルを読み込めません（" + (config == null ? "既定値" : "直前の設定") + "で動作し、読み込めるまで再試行します）: " + ex.Message);
+                    Notify("設定ファイルを読み込めませんでした。読み込めるまで再試行します。トレイメニューの「設定...」から設定し直すこともできます。");
+                    loadFailureReported = true;
+                }
+                if (config != null) return false;
                 next = new Config();
+                loaded = false;
             }
             foreach (var w in warnings) Log.Write("設定ファイルの " + w);
             if (warnings.Count > 0) Notify("設定ファイルに読み込めない行が " + warnings.Count + " 件ありました。詳しくはログを確認してください。");
@@ -197,6 +205,7 @@ namespace VolumeKeeper
             Theme.SetMode(next.Theme);
             if (previous == null || previous.Hotkey != next.Hotkey) RegisterHotkey();
             if (mixer != null) mixer.EndpointPattern = next.EndpointPattern;
+            return loaded;
         }
 
         void Notify(string message)
@@ -237,7 +246,11 @@ namespace VolumeKeeper
         void ShowMixer()
         {
             if (config == null) return;
-            if (mixer == null) mixer = new MixerForm(config.EndpointPattern);
+            if (mixer == null)
+            {
+                mixer = new MixerForm(config.EndpointPattern);
+                mixer.SessionsAdjusted += ids => keeper.Protect(ids);
+            }
             mixer.ShowMixer();
         }
 

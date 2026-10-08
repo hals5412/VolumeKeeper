@@ -1,0 +1,7 @@
+# GitHub Actions（コミットSHAで固定）の更新を月1回プルリクエストで提案してもらう
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
