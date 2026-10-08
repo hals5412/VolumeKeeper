@@ -1,0 +1,54 @@
+name: build
+
+# main への push と PR ではビルドだけ確認し、v1.2.3 形式のタグを push したら Release を作って exe を置く
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME.TrimStart('v') } else { $v = '0.0.0' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1 -Version ${{ steps.version.outputs.version }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "VolumeKeeper-${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Force dist/$name | Out-Null
+          Copy-Item bin/VolumeKeeper.exe, README.md, LICENSE dist/$name
+          Compress-Archive -Path dist/$name/* -DestinationPath dist/$name.zip
+          Copy-Item bin/VolumeKeeper.exe dist/VolumeKeeper.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VolumeKeeper
+          path: |
+            dist/*.zip
+            dist/VolumeKeeper.exe
+
+      - name: Create release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "dist/VolumeKeeper-${{ steps.version.outputs.version }}.zip"
+          gh release create $env:GITHUB_REF_NAME $zip dist/VolumeKeeper.exe --title "VolumeKeeper $env:GITHUB_REF_NAME" --generate-notes
