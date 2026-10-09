@@ -169,6 +169,9 @@ namespace VolumeKeeper
         Dictionary<string, string> known = new Dictionary<string, string>();
         // 初回の設定に失敗した回数（インスタンスID → 回数）
         Dictionary<string, int> failures = new Dictionary<string, int>();
+        // ミキサーでユーザーが操作したセッション（インスタンスID → アプリのキー。キーは次の確認で埋める）。
+        // 初回の再試行も再確認もしない。セッションが消えるか、そのアプリの設定値や対象デバイスが変わると解除する
+        Dictionary<string, string> userAdjusted = new Dictionary<string, string>();
 
         // 適用直後にWindowsが保存値で上書きすることがあるため、少し後にもう一度確認する
         class Recheck { public DateTime Due; public float Before; public int Attempts; }
@@ -179,6 +182,7 @@ namespace VolumeKeeper
         {
             known.Clear();
             failures.Clear();
+            userAdjusted.Clear();
         }
 
         // 音量の設定値が変わった（または追加された）アプリだけ、今あるセッションにも適用し直す
@@ -186,12 +190,20 @@ namespace VolumeKeeper
         {
             foreach (var kv in new List<KeyValuePair<string, string>>(known))
                 if (keys.Contains(kv.Value)) known.Remove(kv.Key);
+            // 設定値を明示的に変えたアプリは、ミキサーで操作したセッションにも新しい値を適用する
+            foreach (var kv in new List<KeyValuePair<string, string>>(userAdjusted))
+                if (kv.Value != null && keys.Contains(kv.Value)) userAdjusted.Remove(kv.Key);
         }
 
-        // ミキサーでユーザーが音量やミュートを操作したセッションは、再確認で上書きしない
+        // ミキサーでユーザーが音量やミュートを操作したセッションは、初回の再試行でも再確認でも上書きしない
         public void Protect(IEnumerable<string> instanceIds)
         {
-            foreach (var id in instanceIds) recheck.Remove(id);
+            foreach (var id in instanceIds)
+            {
+                if (!userAdjusted.ContainsKey(id)) userAdjusted[id] = null;
+                recheck.Remove(id);
+                failures.Remove(id);
+            }
         }
 
         public void Tick(Config config)
@@ -203,6 +215,12 @@ namespace VolumeKeeper
                 float level;
                 if (!config.Levels.TryGetValue(s.Key, out level)) continue;
                 seen.Add(s.InstanceId);
+                if (userAdjusted.ContainsKey(s.InstanceId))
+                {
+                    userAdjusted[s.InstanceId] = s.Key;
+                    current[s.InstanceId] = s.Key;
+                    continue;
+                }
                 string name = s.Key + " @ " + s.EndpointName;
                 Recheck pending;
                 if (!known.ContainsKey(s.InstanceId))
@@ -257,6 +275,8 @@ namespace VolumeKeeper
                 if (!seen.Contains(id)) recheck.Remove(id);
             foreach (var id in new List<string>(failures.Keys))
                 if (!seen.Contains(id)) failures.Remove(id);
+            foreach (var id in new List<string>(userAdjusted.Keys))
+                if (!seen.Contains(id)) userAdjusted.Remove(id);
         }
     }
     static class Program
