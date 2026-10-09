@@ -295,6 +295,9 @@ namespace VolumeKeeper
         // 起動中にもう一度 exe を起動したら設定画面を開く
         public static readonly int SettingsMessage = RegisterWindowMessage("VolumeKeeper.ShowSettings");
 
+        // 終了理由（ログ用）。外から強制終了された場合は「終了しました」自体がログに残らない
+        public static string ExitReason = "理由不明";
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -310,8 +313,24 @@ namespace VolumeKeeper
                 SetProcessDPIAware();
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+
+                // 予期しない終了の原因を追えるよう、起動・終了・電源状態の変化をログに残す
+                Log.Write("起動しました（バージョン " + Application.ProductVersion + "、PID " + System.Diagnostics.Process.GetCurrentProcess().Id + "）");
                 Application.ThreadException += (s, e) => Log.Write("エラー: " + e.Exception);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => Log.Write("想定外のエラーで終了します: " + e.ExceptionObject);
+                Microsoft.Win32.SystemEvents.PowerModeChanged += (s, e) =>
+                {
+                    if (e.Mode == Microsoft.Win32.PowerModes.Suspend) Log.Write("スリープに入ります");
+                    else if (e.Mode == Microsoft.Win32.PowerModes.Resume) Log.Write("スリープから復帰しました");
+                };
+                Microsoft.Win32.SystemEvents.SessionEnding += (s, e) =>
+                {
+                    ExitReason = e.Reason == Microsoft.Win32.SessionEndReasons.Logoff ? "Windowsのサインアウト" : "Windowsのシャットダウン";
+                    Log.Write(ExitReason + "を検知しました");
+                };
+
                 Application.Run(new TrayContext());
+                Log.Write("終了しました（" + ExitReason + "）");
             }
         }
     }

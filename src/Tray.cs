@@ -105,7 +105,7 @@ namespace VolumeKeeper
             menu.Items.Add("設定...", null, delegate { ShowSettings(); });
             menu.Items.Add("ログを開く", null, delegate { OpenFile(Log.PathName); });
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("終了", null, delegate { ExitThread(); });
+            menu.Items.Add("終了", null, delegate { Program.ExitReason = "トレイメニューの「終了」"; ExitThread(); });
 
             tray.Icon = LoadTrayIcon();
             tray.Text = "VolumeKeeper";
@@ -145,12 +145,20 @@ namespace VolumeKeeper
                 DateTime stamp = File.GetLastWriteTimeUtc(configPath);
                 if (stamp != configStamp && ReloadConfig()) configStamp = stamp;
                 if (config != null) keeper.Tick(config);
+                // 止まった時刻を後から絞り込めるよう、1時間ごとに稼働中であることを記録する
+                if (DateTime.Now - lastHeartbeat >= TimeSpan.FromHours(1))
+                {
+                    if (lastHeartbeat != DateTime.MinValue) Log.Write("稼働中");
+                    lastHeartbeat = DateTime.Now;
+                }
             }
             catch (Exception ex)
             {
                 Log.Write("エラー: " + ex.Message);
             }
         }
+
+        DateTime lastHeartbeat = DateTime.MinValue;
 
         // 読み込みに失敗している間、ログと通知を繰り返さないための印
         bool loadFailureReported;
